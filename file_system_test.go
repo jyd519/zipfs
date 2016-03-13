@@ -223,7 +223,7 @@ func TestFileInfo(t *testing.T) {
 		HasZipFile bool
 	}{
 		// Don't use any text files here because the sizes
-		// are different betwen Windows and Unix-like OSs.
+		// are different between Windows and Unix-like OSs.
 		{
 			Path:       "/img/circle.png",
 			Name:       "circle.png",
