@@ -64,8 +64,8 @@ func New(name string) (*FileSystem, error) {
 	for _, zf := range fs.reader.File {
 		fi := fs.fileInfos.FindOrCreate(zf.Name)
 		fi.zipFile = zf
-		dirEntry := fs.fileInfos.FindOrCreateParent(zf.Name)
-		dirEntry.fileInfos = append(dirEntry.fileInfos, fi)
+		fiParent := fs.fileInfos.FindOrCreateParent(zf.Name)
+		fiParent.fileInfos = append(fiParent.fileInfos, fi)
 	}
 
 	for _, fi := range fs.fileInfos {
