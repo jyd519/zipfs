@@ -112,7 +112,7 @@ func (fl fileInfoList) Len() int {
 func (fl fileInfoList) Less(i, j int) bool {
 	name1 := fl[i].Name()
 	name2 := fl[j].Name()
-	return strings.Compare(name1, name2) < 0
+	return name1 < name2
 }
 
 func (fl fileInfoList) Swap(i, j int) {
