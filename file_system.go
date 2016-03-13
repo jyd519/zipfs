@@ -15,7 +15,6 @@ import (
 )
 
 var (
-	errNotImplemented   = errors.New("not implemented yet")
 	errFileClosed       = errors.New("file closed")
 	errFileSystemClosed = errors.New("filesystem closed")
 	errNotDirectory     = errors.New("not a directory")
@@ -26,8 +25,8 @@ var (
 // It implements the http.FileSystem interface.
 type FileSystem struct {
 	readerAt  io.ReaderAt
-	reader    *zip.Reader
 	closer    io.Closer
+	reader    *zip.Reader
 	fileInfos fileInfoMap
 }
 
@@ -46,6 +45,13 @@ func New(name string) (*FileSystem, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Separate the file into an io.ReaderAt and an io.Closer.
+	// Earlier versions of the code allowed for opening a filesystem
+	// just with an io.ReaderAt. Not also that thw zip.Reader is
+	// not actually used outside of this function so it probably
+	// does not need to be in the FileSystem structure. Keeping it
+	// there for now but may remove it in future.
 	fs := &FileSystem{
 		closer:    file,
 		readerAt:  file,
@@ -68,6 +74,7 @@ func New(name string) (*FileSystem, error) {
 		fiParent.fileInfos = append(fiParent.fileInfos, fi)
 	}
 
+	// Sort all of the list of fileInfos in each directory.
 	for _, fi := range fs.fileInfos {
 		if len(fi.fileInfos) > 1 {
 			sort.Sort(fi.fileInfos)
