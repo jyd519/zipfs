@@ -9,3 +9,12 @@
 
 Package `zipfs` provides a convenient way for a HTTP server to serve
 static content from a ZIP file.
+
+Usage is simple. See the example in the
+[GoDoc](https://godoc.org/github.com/spkg/zipfs) documentation.
+
+## License
+
+Some of the code in this project is based on code in the `net/http`
+package in the Go standard library. For this reason, this package has
+the same license as the Go standard library.
