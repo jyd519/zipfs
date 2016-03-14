@@ -2,10 +2,14 @@ package zipfs
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -204,6 +208,18 @@ func TestServeHTTP(t *testing.T) {
 			ETag:            `"27106c15f45b"`,
 		},
 		{
+			Path:   "/random.dat",
+			Status: 304,
+			Headers: []string{
+				fmt.Sprintf("If-Modified-Since: %s", time.Now().UTC().Add(time.Hour*10000).Format(http.TimeFormat)),
+				"Accept-Encoding: deflate, gzip",
+			},
+			ContentType:     "",
+			ContentLength:   "",
+			ContentEncoding: "",
+			Size:            0,
+		},
+		{
 			Path:          "random.dat",
 			Status:        200,
 			Headers:       []string{},
@@ -277,6 +293,294 @@ func TestServeHTTP(t *testing.T) {
 		}
 		if tc.Location != "" {
 			assert.Equal(tc.Location, w.Header().Get("Location"), tc.Path)
+		}
+	}
+}
+
+func TestToHTTPError(t *testing.T) {
+	assert := assert.New(t)
+
+	testCases := []struct {
+		Err     error
+		Message string
+		Status  int
+	}{
+		{
+			Err:     os.ErrNotExist,
+			Message: "404 page not found",
+			Status:  404,
+		},
+		{
+			Err:     os.ErrPermission,
+			Message: "403 Forbidden",
+			Status:  403,
+		},
+		{
+			Err:     errors.New("test error condition"),
+			Message: "500 Internal Server Error",
+			Status:  500,
+		},
+	}
+
+	for _, tc := range testCases {
+		msg, code := toHTTPError(tc.Err)
+		assert.Equal(tc.Message, msg, tc.Err.Error())
+		assert.Equal(tc.Status, code, tc.Err.Error())
+		msg, code = toHTTPError(&os.PathError{Op: "op", Path: "path", Err: tc.Err})
+		assert.Equal(tc.Message, msg, tc.Err.Error())
+		assert.Equal(tc.Status, code, tc.Err.Error())
+	}
+}
+
+func TestLocalRedirect(t *testing.T) {
+	assert := assert.New(t)
+
+	testCases := []struct {
+		Url      string
+		NewPath  string
+		Location string
+	}{
+		{
+			Url:      "/test",
+			NewPath:  "./test/",
+			Location: "./test/",
+		},
+		{
+			Url:      "/test?a=32&b=54",
+			NewPath:  "./test/",
+			Location: "./test/?a=32&b=54",
+		},
+	}
+
+	for _, tc := range testCases {
+		u, err := url.Parse(tc.Url)
+		assert.NoError(err)
+		r := &http.Request{
+			URL: u,
+		}
+		w := NewTestResponseWriter()
+		localRedirect(w, r, tc.NewPath)
+		assert.Equal(http.StatusMovedPermanently, w.status)
+		assert.Equal(tc.Location, w.Header().Get("Location"))
+	}
+}
+
+func TestCheckETag(t *testing.T) {
+	assert := assert.New(t)
+
+	testCases := []struct {
+		ModTime       time.Time
+		Method        string
+		Etag          string
+		Range         string
+		IfRange       string
+		IfNoneMatch   string
+		ContentType   string
+		ContentLength string
+
+		RangeReq string
+		Done     bool
+	}{
+		{
+			// Using the modified time instead of the ETag in If-Range header
+			// If-None-Match is not set.
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "GET",
+			Etag:          `"xxxxyyyy"`,
+			Range:         "bytes=500-999",
+			IfRange:       `Wed, 12 Apr 2006 15:04:05 GMT`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "bytes=500-999",
+			Done:     false,
+		},
+		{
+			// Using the modified time instead of the ETag in If-Range header
+			// If-None-Match is set.
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "GET",
+			Etag:          `"xxxxyyyy"`,
+			Range:         "bytes=500-999",
+			IfRange:       `Wed, 12 Apr 2006 15:04:05 GMT`,
+			IfNoneMatch:   `"xxxxyyyy"`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "",
+			Done:     true,
+		},
+		{
+			// ETag not set, but If-None-Match is.
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "GET",
+			IfNoneMatch:   `"xxxxyyyy"`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "",
+			Done:     false,
+		},
+		{
+			// ETag matches If-None-Match, but method is not GET or HEAD
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "POST",
+			Etag:          `"xxxxyyyy"`,
+			IfNoneMatch:   `"xxxxyyyy"`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "",
+			Done:     false,
+		},
+		{
+			// Using the ETag in the If-Range header
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "GET",
+			Etag:          `"xxxxyyyy"`,
+			Range:         "bytes=500-999",
+			IfRange:       `"xxxxyyyy"`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "bytes=500-999",
+			Done:     false,
+		},
+		{
+			// Using an out of date ETag in the If-Range header
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "GET",
+			Etag:          `"xxxxyyyy"`,
+			Range:         "bytes=500-999",
+			IfRange:       `"aaaabbbb"`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "",
+			Done:     false,
+		},
+		{
+			// Using an out of date ETag in the If-Range header
+			ModTime:       time.Date(2006, 4, 12, 15, 4, 5, 0, time.UTC),
+			Method:        "GET",
+			Etag:          `"xxxxyyyy"`,
+			Range:         "bytes=500-999",
+			IfRange:       `"aaaabbbb"`,
+			ContentType:   "text/html",
+			ContentLength: "2024",
+
+			RangeReq: "",
+			Done:     false,
+		},
+	}
+
+	for i, tc := range testCases {
+		r := &http.Request{Method: tc.Method, Header: http.Header{}}
+		w := NewTestResponseWriter()
+		if tc.Etag != "" {
+			w.Header().Add("Etag", tc.Etag)
+		}
+		if tc.Range != "" {
+			r.Header.Add("Range", tc.Range)
+		}
+		if tc.IfRange != "" {
+			r.Header.Add("If-Range", tc.IfRange)
+		}
+		if tc.IfNoneMatch != "" {
+			r.Header.Add("If-None-Match", tc.IfNoneMatch)
+		}
+		if tc.ContentType != "" {
+			w.Header().Add("Content-Type", tc.ContentType)
+		}
+		if tc.ContentLength != "" {
+			w.Header().Add("Content-Length", tc.ContentLength)
+		}
+		_ = "breakpoint"
+		rangeReq, done := checkETag(w, r, tc.ModTime)
+		assert.Equal(tc.RangeReq, rangeReq, fmt.Sprintf("test case #%d", i))
+		assert.Equal(tc.Done, done, fmt.Sprintf("test case #%d", i))
+		if done {
+			assert.Equal("", w.Header().Get("Content-Length"))
+			assert.Equal("", w.Header().Get("Content-Type"))
+		} else {
+			assert.Equal(tc.ContentLength, w.Header().Get("Content-Length"))
+			assert.Equal(tc.ContentType, w.Header().Get("Content-Type"))
+		}
+	}
+}
+
+func TestCheckLastModified(t *testing.T) {
+	assert := assert.New(t)
+
+	testCases := []struct {
+		ModTime         time.Time
+		IfModifiedSince string
+		ContentType     string
+		ContentLength   string
+		LastModified    string
+		Status          int
+		Done            bool
+	}{
+		{
+			ModTime:         time.Date(2020, 8, 1, 15, 3, 41, 0, time.UTC),
+			IfModifiedSince: "Sat, 01 Aug 2020 15:03:41 GMT",
+			ContentType:     "text/html",
+			ContentLength:   "3000",
+			Status:          http.StatusNotModified,
+			Done:            true,
+		},
+		{
+			ModTime:         time.Date(2020, 8, 1, 15, 3, 41, 0, time.UTC),
+			IfModifiedSince: "Sat, 01 Aug 2020 15:03:40 GMT",
+			ContentType:     "text/html",
+			ContentLength:   "3000",
+			LastModified:    "Sat, 01 Aug 2020 15:03:41 GMT",
+			Status:          http.StatusOK,
+			Done:            false,
+		},
+		{
+			ModTime:         time.Time{},
+			IfModifiedSince: "Sat, 01 Aug 2020 15:03:40 GMT",
+			ContentType:     "text/html",
+			ContentLength:   "3000",
+			Status:          http.StatusOK,
+			Done:            false,
+		},
+		{
+			ModTime:         time.Unix(0, 0),
+			IfModifiedSince: "Sat, 01 Aug 2020 15:03:40 GMT",
+			ContentType:     "text/html",
+			ContentLength:   "3000",
+			Status:          http.StatusOK,
+			Done:            false,
+		},
+	}
+
+	for i, tc := range testCases {
+		r := &http.Request{Header: http.Header{}}
+		w := NewTestResponseWriter()
+		if tc.IfModifiedSince != "" {
+			r.Header.Set("If-Modified-Since", tc.IfModifiedSince)
+		}
+		if tc.ContentType != "" {
+			w.Header().Set("Content-Type", tc.ContentType)
+		}
+		if tc.ContentLength != "" {
+			w.Header().Set("Content-Length", tc.ContentLength)
+		}
+		done := checkLastModified(w, r, tc.ModTime)
+		failText := fmt.Sprintf("test case #%d", i)
+		assert.Equal(tc.Done, done, failText)
+		assert.Equal(tc.Status, w.status, failText)
+		if tc.LastModified != "" {
+			assert.Equal(tc.LastModified, w.Header().Get("Last-Modified"), failText)
+		}
+		if done {
+			assert.Equal("", w.Header().Get("Content-Type"))
+			assert.Equal("", w.Header().Get("Content-Length"))
+		} else {
+			assert.Equal(tc.ContentType, w.Header().Get("Content-Type"))
+			assert.Equal(tc.ContentLength, w.Header().Get("Content-Length"))
 		}
 	}
 }

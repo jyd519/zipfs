@@ -104,10 +104,6 @@ func serveFile(w http.ResponseWriter, r *http.Request, fs *FileSystem, name stri
 	serveContent(w, r, fs, d)
 }
 
-// if name is empty, filename is unknown. (used for mime type, before sniffing)
-// if modtime.IsZero(), modtime is unknown.
-// content must be seeked to the beginning of the file.
-// The sizeFunc is called at most once. Its error, if any, is sent in the HTTP response.
 func serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fileInfo) {
 	if checkLastModified(w, r, fi.ModTime()) {
 		return
@@ -142,6 +138,7 @@ func serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fi
 	}
 }
 
+// serveIdentity serves a zip file in identity content encoding .
 func serveIdentity(w http.ResponseWriter, r *http.Request, zf *zip.File) {
 	// TODO: need to check if the client explicitly refuses to accept
 	// identity encoding (Accept-Encoding: identity;q=0), but this is
@@ -149,7 +146,8 @@ func serveIdentity(w http.ResponseWriter, r *http.Request, zf *zip.File) {
 
 	reader, err := zf.Open()
 	if err != nil {
-		internalServerError(w, r, err)
+		msg, code := toHTTPError(err)
+		http.Error(w, msg, code)
 		return
 	}
 	defer reader.Close()
@@ -162,6 +160,8 @@ func serveIdentity(w http.ResponseWriter, r *http.Request, zf *zip.File) {
 	}
 }
 
+// serveDeflat serves a zip file in deflate content-encoding if the
+// user agent can accept it. Otherwise it calls serveIdentity.
 func serveDeflate(w http.ResponseWriter, r *http.Request, f *zip.File, readerAt io.ReaderAt) {
 	acceptEncoding := r.Header.Get("Accept-Encoding")
 
@@ -188,7 +188,8 @@ func serveDeflate(w http.ResponseWriter, r *http.Request, f *zip.File, readerAt 
 	remaining := contentLength
 	offset, err := f.DataOffset()
 	if err != nil {
-		internalServerError(w, r, err)
+		msg, code := toHTTPError(err)
+		http.Error(w, msg, code)
 		return
 	}
 
@@ -212,7 +213,8 @@ func serveDeflate(w http.ResponseWriter, r *http.Request, f *zip.File, readerAt 
 		if err != nil {
 			if written == 0 {
 				// have not written anything to the client yet, so we can send an error
-				internalServerError(w, r, err)
+				msg, code := toHTTPError(err)
+				http.Error(w, msg, code)
 			}
 			return
 		}
@@ -246,7 +248,7 @@ func setContentType(w http.ResponseWriter, filename string) {
 	}
 }
 
-// calcEtag calculates and ETag value for a given zip file based on
+// calcEtag calculates an ETag value for a given zip file based on
 // the file's CRC and its length.
 func calcEtag(f *zip.File) string {
 	size := f.UncompressedSize64
@@ -257,30 +259,6 @@ func calcEtag(f *zip.File) string {
 
 	// etag should always be in double quotes
 	return fmt.Sprintf(`"%x"`, etag)
-}
-
-// serveStandard extracts the file from the zip file to a temporary
-// location and serves it using the std library. This only happens
-// for more complicated requests, such as range requests.
-func serveStandard(w http.ResponseWriter, r *http.Request, f *zip.File) {
-	tempFile, err := createTempFile(f)
-	if err != nil {
-		internalServerError(w, r, err)
-		return
-	}
-	defer func() {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-	}()
-
-	http.ServeContent(w, r, f.Name, f.ModTime(), tempFile)
-}
-
-// TODO: not a good idea to leak error messages back to the user, but
-// possibly helpful at the moment. Could add a logger to the file Server
-// for logging errors.
-func internalServerError(w http.ResponseWriter, r *http.Request, err error) {
-	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 var unixEpochTime = time.Unix(0, 0)
