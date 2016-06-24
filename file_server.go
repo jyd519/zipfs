@@ -204,10 +204,6 @@ func serveDeflate(w http.ResponseWriter, r *http.Request, f *zip.File, readerAt 
 			size = int(remaining)
 		}
 
-		// Note that we read into a different slice than was
-		// obtained from bufPool.Get. The reason for this is that
-		// we want to be able to give back the original slice
-		// so that it can be re-used.
 		b := buf[:size]
 		_, err := readerAt.ReadAt(b, offset)
 		if err != nil {
