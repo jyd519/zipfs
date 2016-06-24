@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -151,7 +152,7 @@ func TestServeHTTP(t *testing.T) {
 			Headers: []string{
 				"Accept-Encoding: deflate",
 			},
-			ContentType:     "application/octet-stream",
+			ContentType:     getMimeType(".dat"),
 			ContentLength:   "10000",
 			ContentEncoding: "",
 			Size:            10000,
@@ -161,7 +162,7 @@ func TestServeHTTP(t *testing.T) {
 			Path:            "/random.dat",
 			Status:          200,
 			Headers:         []string{},
-			ContentType:     "application/octet-stream",
+			ContentType:     getMimeType(".dat"),
 			ContentLength:   "10000",
 			ContentEncoding: "",
 			Size:            10000,
@@ -174,7 +175,7 @@ func TestServeHTTP(t *testing.T) {
 				`If-Range: "27106c15f45b"`,
 				"Range: bytes=0-499",
 			},
-			ContentType:     "application/octet-stream",
+			ContentType:     getMimeType(".dat"),
 			ContentLength:   "500",
 			ContentEncoding: "",
 			Size:            500,
@@ -188,7 +189,7 @@ func TestServeHTTP(t *testing.T) {
 				"Range: bytes=0-499",
 				"Accept-Encoding: deflate, gzip",
 			},
-			ContentType:     "application/octet-stream",
+			ContentType:     getMimeType(".dat"),
 			ContentLength:   "10000",
 			ContentEncoding: "",
 			Size:            10000,
@@ -223,7 +224,7 @@ func TestServeHTTP(t *testing.T) {
 			Path:          "random.dat",
 			Status:        200,
 			Headers:       []string{},
-			ContentType:   "application/octet-stream",
+			ContentType:   getMimeType(".dat"),
 			ContentLength: "10000",
 			Size:          10000,
 			ETag:          `"27106c15f45b"`,
@@ -583,4 +584,12 @@ func TestCheckLastModified(t *testing.T) {
 			assert.Equal(tc.ContentLength, w.Header().Get("Content-Length"))
 		}
 	}
+}
+
+func getMimeType(ext string) string {
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	return mimeType
 }
