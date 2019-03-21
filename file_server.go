@@ -8,8 +8,8 @@ package zipfs
 // license that can be found in the LICENSE.md file.
 
 import (
-	"archive/zip"
 	"fmt"
+	"github.com/jyd519/zip"
 	"io"
 	"mime"
 	"net/http"

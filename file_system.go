@@ -1,8 +1,8 @@
 package zipfs
 
 import (
-	"archive/zip"
 	"errors"
+	"github.com/jyd519/zip"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -30,9 +30,9 @@ type FileSystem struct {
 	fileInfos fileInfoMap
 }
 
-// New will open the Zip file specified by name and
+// WithPassword will open the encrypted Zip file specified by name and
 // return a new FileSystem based on that Zip file.
-func New(name string) (*FileSystem, error) {
+func WithPassword(name, password string) (*FileSystem, error) {
 	file, err := os.Open(name)
 	if err != nil {
 		return nil, err
@@ -70,6 +70,9 @@ func New(name string) (*FileSystem, error) {
 	for _, zf := range fs.reader.File {
 		fi := fs.fileInfos.FindOrCreate(zf.Name)
 		fi.zipFile = zf
+		if zf.IsEncrypted() {
+			zf.SetPassword(password)
+		}
 		fiParent := fs.fileInfos.FindOrCreateParent(zf.Name)
 		fiParent.fileInfos = append(fiParent.fileInfos, fi)
 	}
@@ -82,6 +85,12 @@ func New(name string) (*FileSystem, error) {
 	}
 
 	return fs, nil
+}
+
+// New will open the Zip file specified by name and
+// return a new FileSystem based on that Zip file.
+func New(name string) (*FileSystem, error) {
+	return WithPassword(name, "")
 }
 
 // Open implements the http.FileSystem interface.

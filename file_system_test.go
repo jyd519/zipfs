@@ -1,9 +1,9 @@
 package zipfs
 
 import (
-	"archive/zip"
 	"crypto/md5"
 	"fmt"
+	"github.com/jyd519/zip"
 	"io"
 	"os"
 	"strings"

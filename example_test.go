@@ -3,7 +3,7 @@ package zipfs_test
 import (
 	"net/http"
 
-	"github.com/spkg/zipfs"
+	"github.com/jyd519/zipfs"
 )
 
 func Example() error {
