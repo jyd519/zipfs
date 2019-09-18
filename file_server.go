@@ -132,7 +132,8 @@ func serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fi
 	case zip.Store:
 		serveIdentity(w, r, fi.zipFile)
 	case zip.Deflate:
-		serveDeflate(w, r, fi.zipFile, fs.readerAt)
+		serveIdentity(w, r, fi.zipFile)
+		// serveDeflate(w, r, fi.zipFile, fs.readerAt)
 	default:
 		http.Error(w, fmt.Sprintf("unsupported zip method: %d", fi.zipFile.Method), http.StatusInternalServerError)
 	}
