@@ -9,7 +9,6 @@ package zipfs
 
 import (
 	"fmt"
-	"github.com/jyd519/zip"
 	"io"
 	"mime"
 	"net/http"
@@ -17,7 +16,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/jyd519/zip"
 )
 
 // FileServer returns a HTTP handler that serves
@@ -26,29 +28,42 @@ import (
 // http.FileServer implementation because it serves compressed content
 // to clients that can accept the "deflate" compression algorithm.
 func FileServer(fs *FileSystem) http.Handler {
-	h := &fileHandler{
+	h := &FileHandler{
 		fs: fs,
 	}
-
 	return h
 }
 
-type fileHandler struct {
-	fs *FileSystem
+type FileHandler struct {
+	fs    *FileSystem
+	mu    sync.Mutex
+	files map[string]string
 }
 
-func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upath := r.URL.Path
 	if !strings.HasPrefix(upath, "/") {
 		upath = "/" + upath
 		r.URL.Path = upath
 	}
 
-	serveFile(w, r, h.fs, path.Clean(upath), true)
+	h.serveFile(w, r, h.fs, path.Clean(upath), true)
+}
+
+func (h *FileHandler) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, p := range h.files {
+		os.Remove(p)
+	}
+	for k := range h.files {
+		delete(h.files, k)
+	}
+	return nil
 }
 
 // name is '/'-separated, not filepath.Separator.
-func serveFile(w http.ResponseWriter, r *http.Request, fs *FileSystem, name string, redirect bool) {
+func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, fs *FileSystem, name string, redirect bool) {
 	const indexPage = "/index.html"
 
 	// redirect .../index.html to .../
@@ -101,10 +116,47 @@ func serveFile(w http.ResponseWriter, r *http.Request, fs *FileSystem, name stri
 	}
 
 	// serveContent will check modification time and ETag
-	serveContent(w, r, fs, d)
+	h.serveContent(w, r, fs, d)
 }
 
-func serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fileInfo) {
+func (h *FileHandler) getfile(req string, fi *fileInfo) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.files == nil {
+		h.files = make(map[string]string)
+	}
+
+	p := h.files[req]
+	if p == "" {
+		f := fi.openReader(req)
+		defer f.Close()
+
+		tmpfile, err := createTempFile(f.fileInfo.zipFile)
+		if err != nil {
+			return "", nil
+		}
+		defer tmpfile.Close()
+
+		p = tmpfile.Name()
+		h.files[req] = p
+	}
+
+	return p, nil
+}
+
+func (h *FileHandler) removeFile(req string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.files == nil {
+		return nil
+	}
+	delete(h.files, req)
+	return nil
+}
+
+func (h *FileHandler) serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fileInfo) {
 	if checkLastModified(w, r, fi.ModTime()) {
 		return
 	}
@@ -119,10 +171,21 @@ func serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fi
 	if rangeReq != "" {
 		// Range request requires seeking, so at this point create a temporary
 		// file and let the standard library serve it.
-		f := fi.openReader(r.URL.Path)
-		defer f.Close()
-		f.createTempFile()
-		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f.file)
+		p, err := h.getfile(r.URL.Path, fi)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("create tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
+			return
+		}
+
+		file, err := os.Open(p)
+		if err != nil {
+			h.removeFile(r.URL.Path)
+			http.Error(w, fmt.Sprintf("open tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		http.ServeContent(w, r, fi.Name(), fi.ModTime(), file)
 		return
 	}
 
@@ -132,8 +195,11 @@ func serveContent(w http.ResponseWriter, r *http.Request, fs *FileSystem, fi *fi
 	case zip.Store:
 		serveIdentity(w, r, fi.zipFile)
 	case zip.Deflate:
-		serveIdentity(w, r, fi.zipFile)
-		// serveDeflate(w, r, fi.zipFile, fs.readerAt)
+		if fi.zipFile.IsEncrypted() {
+			serveIdentity(w, r, fi.zipFile)
+		} else {
+			serveDeflate(w, r, fi.zipFile, fs.readerAt)
+		}
 	default:
 		http.Error(w, fmt.Sprintf("unsupported zip method: %d", fi.zipFile.Method), http.StatusInternalServerError)
 	}
