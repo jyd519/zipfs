@@ -183,6 +183,19 @@ func TestServeHTTP(t *testing.T) {
 		},
 		{
 			Path:   "/random.dat",
+			Status: 206,
+			Headers: []string{
+				`If-Range: "27106c15f45b"`,
+				"Range: bytes=0-499",
+			},
+			ContentType:     getMimeType(".dat"),
+			ContentLength:   "500",
+			ContentEncoding: "",
+			Size:            500,
+			ETag:            `"27106c15f45b"`,
+		},
+		{
+			Path:   "/random.dat",
 			Status: 200,
 			Headers: []string{
 				`If-Range: "123456789"`,

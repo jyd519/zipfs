@@ -11,6 +11,6 @@ func Example() error {
 	if err != nil {
 		return err
 	}
-
-	return http.ListenAndServe(":8080", zipfs.FileServer(fs))
+	h := zipfs.FileServer(fs)
+	return http.ListenAndServe(":8080", h)
 }

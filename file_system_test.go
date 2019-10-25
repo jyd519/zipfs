@@ -297,7 +297,9 @@ func TestFile(t *testing.T) {
 		}
 		buf := make([]byte, size)
 		n, err := r.Read(buf)
-		require.NoError(err)
+		if err != nil && err != io.EOF {
+			require.NoError(err)
+		}
 		require.Equal(size, n)
 		md5Text := fmt.Sprintf("%x", md5.Sum(buf))
 		n, err = r.Read(buf)
@@ -309,7 +311,7 @@ func TestFile(t *testing.T) {
 
 	for _, tc := range testCases {
 		file, err := fs.Open(tc.Path)
-		assert.NoError(err)
+		assert.NoError(err, tc.Path)
 		assert.Equal(tc.MD5, calcMD5(file, tc.Size, false))
 
 		// seek back to the beginning, should not have
