@@ -86,6 +86,7 @@ func TestServeHTTP(t *testing.T) {
 	require.NotNil(fs)
 
 	handler := FileServer(fs)
+	handler.SupportPartialRequest = true
 
 	testCases := []struct {
 		Path            string

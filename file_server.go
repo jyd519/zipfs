@@ -10,6 +10,7 @@ package zipfs
 import (
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -27,17 +28,20 @@ import (
 // It provides slightly better performance than the
 // http.FileServer implementation because it serves compressed content
 // to clients that can accept the "deflate" compression algorithm.
-func FileServer(fs *FileSystem) http.Handler {
+func FileServer(fs *FileSystem) *FileHandler {
 	h := &FileHandler{
-		fs: fs,
+		fs:                    fs,
+		SupportPartialRequest: false,
 	}
 	return h
 }
 
 type FileHandler struct {
-	fs    *FileSystem
-	mu    sync.Mutex
-	files map[string]string
+	fs                    *FileSystem
+	SupportPartialRequest bool
+	PartialContentMinSize uint64
+	mu                    sync.Mutex
+	files                 map[string]string
 }
 
 func (h *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +156,13 @@ func (h *FileHandler) removeFile(req string) error {
 	if h.files == nil {
 		return nil
 	}
-	delete(h.files, req)
+
+	if p, ok := h.files[req]; ok {
+		if p != "" {
+			os.Remove(p)
+		}
+		delete(h.files, req)
+	}
 	return nil
 }
 
@@ -168,7 +178,8 @@ func (h *FileHandler) serveContent(w http.ResponseWriter, r *http.Request, fs *F
 	if done {
 		return
 	}
-	if rangeReq != "" {
+
+	if rangeReq != "" && h.SupportPartialRequest && fi.zipFile.UncompressedSize64 > h.PartialContentMinSize {
 		// Range request requires seeking, so at this point create a temporary
 		// file and let the standard library serve it.
 		p, err := h.getfile(r.URL.Path, fi)
@@ -179,9 +190,20 @@ func (h *FileHandler) serveContent(w http.ResponseWriter, r *http.Request, fs *F
 
 		file, err := os.Open(p)
 		if err != nil {
+			log.Printf("zipfs: open tempfile failed: %s, %d", r.URL.Path, fi.zipFile.Method)
 			h.removeFile(r.URL.Path)
-			http.Error(w, fmt.Sprintf("open tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
-			return
+
+			p, err := h.getfile(r.URL.Path, fi)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("create tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
+				return
+			}
+
+			file, err = os.Open(p)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("open tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
+				return
+			}
 		}
 		defer file.Close()
 
