@@ -10,7 +10,6 @@ package zipfs
 import (
 	"fmt"
 	"io"
-	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -40,6 +39,7 @@ type FileHandler struct {
 	fs                    *FileSystem
 	SupportPartialRequest bool
 	PartialContentMinSize uint64
+	CacheDir              string
 	mu                    sync.Mutex
 	files                 map[string]string
 }
@@ -57,9 +57,6 @@ func (h *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *FileHandler) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, p := range h.files {
-		os.Remove(p)
-	}
 	for k := range h.files {
 		delete(h.files, k)
 	}
@@ -124,26 +121,21 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, fs *File
 }
 
 func (h *FileHandler) getfile(req string, fi *fileInfo) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	key := strings.ReplaceAll(req, "/", "_")
 
-	if h.files == nil {
-		h.files = make(map[string]string)
-	}
+	ext := filepath.Ext(key)
+	name := "fs" + strings.TrimSuffix(key, ext) + "-" + strings.Trim(calcEtag(fi.zipFile), `"`) + ext
+	p := filepath.Join(h.CacheDir, name)
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
 
-	p := h.files[req]
-	if p == "" {
 		f := fi.openReader(req)
 		defer f.Close()
-
-		tmpfile, err := createTempFile(f.fileInfo.zipFile)
+		err := extractFile(f.fileInfo.zipFile, p)
 		if err != nil {
 			return "", nil
 		}
-		defer tmpfile.Close()
-
-		p = tmpfile.Name()
-		h.files[req] = p
 	}
 
 	return p, nil
@@ -187,27 +179,7 @@ func (h *FileHandler) serveContent(w http.ResponseWriter, r *http.Request, fs *F
 			http.Error(w, fmt.Sprintf("create tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
 			return
 		}
-
-		file, err := os.Open(p)
-		if err != nil {
-			log.Printf("zipfs: open tempfile failed: %s, %d", r.URL.Path, fi.zipFile.Method)
-			h.removeFile(r.URL.Path)
-
-			p, err := h.getfile(r.URL.Path, fi)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("create tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
-				return
-			}
-
-			file, err = os.Open(p)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("open tempfile failed: %d", fi.zipFile.Method), http.StatusInternalServerError)
-				return
-			}
-		}
-		defer file.Close()
-
-		http.ServeContent(w, r, fi.Name(), fi.ModTime(), file)
+		http.ServeFile(w, r, p)
 		return
 	}
 
@@ -459,4 +431,30 @@ func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {
 	}
 	w.Header().Set("Location", newPath)
 	w.WriteHeader(http.StatusMovedPermanently)
+}
+
+func extractFile(f *zip.File, dest string) error {
+	reader, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	tmpExt := ".tmp"
+	tempFile, err := os.Create(dest + tmpExt)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(tempFile, reader)
+	if err != nil {
+		tempFile.Close()
+		os.Remove(dest)
+		return err
+	}
+
+	tempFile.Close()
+
+	os.Remove(dest)
+	return os.Rename(dest+tmpExt, dest)
 }
